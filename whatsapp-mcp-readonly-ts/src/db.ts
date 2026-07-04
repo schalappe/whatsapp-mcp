@@ -62,13 +62,15 @@ export class ReadOnlyDb {
     const where: string[] = [];
     const params: (string | number)[] = [];
     if (opts.query) {
-      where.push("(ch.name LIKE ? OR ch.jid LIKE ?)");
+      where.push("(ch.name LIKE ? OR co.display_name LIKE ? OR ch.jid LIKE ?)");
       const like = `%${opts.query}%`;
-      params.push(like, like);
+      params.push(like, like, like);
     }
+    // [>]: DM chats often lack a name -> fall back to contact display name
     const sql = `
-      SELECT ch.jid, ch.name, ch.is_group, ch.last_message_at
+      SELECT ch.jid, COALESCE(ch.name, co.display_name) AS name, ch.is_group, ch.last_message_at
       FROM chats ch
+      LEFT JOIN contacts co ON co.jid = ch.jid
       ${where.length ? "WHERE " + where.join(" AND ") : ""}
       ORDER BY COALESCE(ch.last_message_at, '') DESC, ch.jid ASC
       LIMIT ? OFFSET ?`;
@@ -218,7 +220,8 @@ export class ReadOnlyDb {
     return (
       this.db
         .query<ChatRow, [string]>(
-          "SELECT jid, name, is_group, last_message_at FROM chats WHERE jid = ?",
+          `SELECT ch.jid, COALESCE(ch.name, co.display_name) AS name, ch.is_group, ch.last_message_at
+           FROM chats ch LEFT JOIN contacts co ON co.jid = ch.jid WHERE ch.jid = ?`,
         )
         .get(chatJid) ?? null
     );

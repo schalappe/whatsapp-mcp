@@ -24,8 +24,16 @@ describe("redaction", () => {
     expect(redacted).not.toContain("33600000002");
   });
 
-  test("group JIDs pass through (no phone number inside)", () => {
+  test("modern group JIDs pass through (no phone number inside)", () => {
     expect(redactJid(GROUP_CHAT)).toBe(GROUP_CHAT);
+  });
+
+  test("legacy group JIDs embed creator phone and are pseudonymized", () => {
+    const legacy = "22501543668-1507101586@g.us";
+    const redacted = redactJid(legacy);
+    expect(redacted).toMatch(/^redacted-[0-9a-f]{10}@g\.us$/);
+    expect(redacted).not.toContain("22501543668");
+    expect(resolveRedactedJid(redacted, [GROUP_CHAT, legacy])).toBe(legacy);
   });
 
   test("phone numbers in message content are masked", () => {

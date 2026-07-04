@@ -6,6 +6,8 @@ import { createHash } from "node:crypto";
 import type { Config } from "./config.ts";
 
 const USER_JID_RE = /^(\+?\d+)(?:[.:][\d]+)?@(s\.whatsapp\.net|lid|c\.us)$/;
+// [!]: legacy groups = <creator-phone>-<timestamp>@g.us -> phone leaks; modern ids (no dash) hold none
+const LEGACY_GROUP_JID_RE = /^\d+-\d+@g\.us$/;
 // [>]: phone-looking digit runs in free text
 const PHONE_IN_TEXT_RE = /\+?\d[\d\s().\-]{5,}\d/g;
 
@@ -14,15 +16,18 @@ function jidHash(jid: string): string {
 }
 
 /**
- * Pseudonymize user JID: phone part -> stable hash. Agents correlate senders without seeing number.
- * Group JIDs (@g.us) hold no phone -> pass through.
+ * Pseudonymize JID holding a phone number: phone part -> stable hash.
+ * Agents correlate senders without seeing number. Modern group JIDs pass through.
  */
 export function redactJid(jid: string): string {
   const match = USER_JID_RE.exec(jid);
-  if (!match) {
-    return jid;
+  if (match) {
+    return `redacted-${jidHash(match[1]! + "@" + match[2]!)}@${match[2]}`;
   }
-  return `redacted-${jidHash(match[1]! + "@" + match[2]!)}@${match[2]}`;
+  if (LEGACY_GROUP_JID_RE.test(jid)) {
+    return `redacted-${jidHash(jid)}@g.us`;
+  }
+  return jid;
 }
 
 export function isRedactedJid(jid: string): boolean {
