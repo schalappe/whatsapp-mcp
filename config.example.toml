@@ -1,0 +1,28 @@
+# Configuration for the whatsapp-readonly MCP server.
+# Copy to ~/.config/whatsapp-mcp/config.toml (or point WHATSAPP_MCP_CONFIG at it).
+# Every key is optional; the values below are the defaults.
+
+[whatsapp]
+# SQLite database written by whatsapp-reader-go.
+database_path = "/Users/me/.local/share/whatsapp-reader/messages.db"
+# Must stay true; the server refuses to start otherwise.
+readonly = true
+
+[privacy]
+# Pseudonymize phone-number JIDs in responses (chat ids remain usable).
+redact_jids = false
+# Mask phone numbers found inside message text and display names.
+redact_phone_numbers = false
+# Hard cap applied to every tool call (1-500).
+max_messages_per_call = 100
+
+[access]
+# If non-empty, ONLY these chat JIDs are visible.
+allowed_chat_ids = []
+# Always hidden, wins over the allowlist.
+blocked_chat_ids = []
+
+[audit]
+# One JSON line per tool call: tool, filters, outcome. Never message content.
+enabled = true
+log_path = "/Users/me/.local/share/whatsapp-reader/audit.log"

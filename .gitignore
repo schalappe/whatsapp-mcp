@@ -1,0 +1,10 @@
+# Go
+whatsapp-reader-go/whatsapp-reader-go
+*.exe
+
+# Local data — never commit WhatsApp session keys or messages
+*.db
+*.db-wal
+*.db-shm
+audit.log
+config.toml
