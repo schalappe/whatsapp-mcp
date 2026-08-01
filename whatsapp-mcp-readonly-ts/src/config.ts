@@ -27,6 +27,17 @@ export interface Config {
   };
 }
 
+interface RawConfig {
+  whatsapp?: { database_path?: unknown; readonly?: unknown };
+  privacy?: {
+    redact_phone_numbers?: unknown;
+    redact_jids?: unknown;
+    max_messages_per_call?: unknown;
+  };
+  access?: { allowed_chat_ids?: unknown; blocked_chat_ids?: unknown };
+  audit?: { enabled?: unknown; log_path?: unknown };
+}
+
 const DATA_DIR = join(homedir(), ".local", "share", "whatsapp-reader");
 
 export function defaultConfig(): Config {
@@ -67,7 +78,7 @@ export function loadConfig(path: string = configPath()): Config {
   if (!existsSync(path)) {
     return config;
   }
-  const raw = parseToml(readFileSync(path, "utf-8")) as Record<string, any>;
+  const raw = parseToml(readFileSync(path, "utf-8")) as RawConfig;
 
   if (raw.whatsapp?.readonly === false) {
     throw new Error(

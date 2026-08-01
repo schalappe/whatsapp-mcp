@@ -42,10 +42,15 @@ describe("MCP end-to-end", () => {
     });
     expect(result.isError).toBeFalsy();
     const content = result.content as Array<{ type: string; text: string }>;
-    const parsed = JSON.parse(content[0]!.text);
+    const first = content[0];
+    expect(first).toBeDefined();
+    if (!first) throw new Error("missing text content");
+    const parsed = JSON.parse(first.text) as {
+      messages: Array<{ role: unknown }>;
+    };
     expect(parsed.messages.length).toBe(3);
     expect(
-      parsed.messages.every((m: any) => m.role === "me" || m.role === "other"),
+      parsed.messages.every((m) => m.role === "me" || m.role === "other"),
     ).toBe(true);
   });
 
@@ -57,7 +62,7 @@ describe("MCP end-to-end", () => {
     });
     expect(result.isError).toBe(true);
     const content = result.content as Array<{ type: string; text: string }>;
-    expect(content[0]!.text).toMatch(/too broad/);
+    expect(content[0]?.text).toMatch(/too broad/);
   });
 
   test("audit trail records tool name, filters and outcome", async () => {
@@ -68,13 +73,13 @@ describe("MCP end-to-end", () => {
     });
     await client.callTool({ name: "search_messages", arguments: {} });
     expect(auditEntries.length).toBe(2);
-    expect(auditEntries[0].tool).toBe("search_messages");
-    expect(auditEntries[0].params).toMatchObject({
+    expect(auditEntries[0]?.tool).toBe("search_messages");
+    expect(auditEntries[0]?.params).toMatchObject({
       chat_id: ALICE_CHAT,
       query: "merci",
     });
-    expect(auditEntries[0].outcome).toBe("ok");
-    expect(auditEntries[0].result_count).toBe(1);
-    expect(auditEntries[1].outcome).toBe("denied");
+    expect(auditEntries[0]?.outcome).toBe("ok");
+    expect(auditEntries[0]?.result_count).toBe(1);
+    expect(auditEntries[1]?.outcome).toBe("denied");
   });
 });

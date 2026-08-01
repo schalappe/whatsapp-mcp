@@ -6,7 +6,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Config } from "./config.ts";
 import type { AuditLogger } from "./audit.ts";
-import { ReadOnlyDb, toMessageOut, type MessageRow } from "./db.ts";
+import { type ReadOnlyDb, toMessageOut, type MessageRow } from "./db.ts";
 import {
   applyRedaction,
   isRedactedJid,

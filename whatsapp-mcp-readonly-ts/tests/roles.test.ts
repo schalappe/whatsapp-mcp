@@ -73,7 +73,7 @@ describe("me/other separation", () => {
     const me = result.participants.filter((p) => p.role === "me");
     const others = result.participants.filter((p) => p.role === "other");
     expect(me.length).toBe(1);
-    expect(me[0]!.message_count).toBe(1);
+    expect(me[0]?.message_count).toBe(1);
     expect(others.length).toBe(2);
   });
 

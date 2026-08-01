@@ -10,6 +10,8 @@ import { defaultConfig, type Config } from "../src/config.ts";
 import { ReadOnlyDb } from "../src/db.ts";
 import type { ToolContext } from "../src/tools.ts";
 
+type AuditEntry = Parameters<ToolContext["audit"]["log"]>[0];
+
 // [!]: must stay in sync with whatsapp-reader-go/store.go
 const SCHEMA = `
 CREATE TABLE chats (
@@ -140,7 +142,7 @@ export function defaultMessages(): FixtureMessage[] {
 export function makeContext(overrides?: {
   config?: (config: Config) => void;
   messages?: FixtureMessage[];
-}): { ctx: ToolContext; dbPath: string; auditEntries: any[] } {
+}): { ctx: ToolContext; dbPath: string; auditEntries: AuditEntry[] } {
   const dir = mkdtempSync(join(tmpdir(), "wamcp-test-"));
   const dbPath = join(dir, "messages.db");
   seedDatabase(dbPath, overrides?.messages ?? defaultMessages());
@@ -148,7 +150,7 @@ export function makeContext(overrides?: {
   config.whatsapp.database_path = dbPath;
   config.audit.enabled = false;
   overrides?.config?.(config);
-  const auditEntries: any[] = [];
+  const auditEntries: AuditEntry[] = [];
   return {
     ctx: {
       db: new ReadOnlyDb(dbPath),

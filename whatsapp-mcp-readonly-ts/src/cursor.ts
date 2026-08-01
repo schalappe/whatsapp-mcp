@@ -32,9 +32,15 @@ export function decodeChatCursor(cursor: string): ChatCursor {
   return { offset: Math.floor(value.offset) };
 }
 
-function decode(cursor: string): any {
+function decode(
+  cursor: string,
+): { ts?: unknown; id?: unknown; offset?: unknown } | null {
   try {
-    return JSON.parse(Buffer.from(cursor, "base64url").toString("utf-8"));
+    return JSON.parse(Buffer.from(cursor, "base64url").toString("utf-8")) as {
+      ts?: unknown;
+      id?: unknown;
+      offset?: unknown;
+    } | null;
   } catch {
     throw new Error("invalid cursor: malformed");
   }

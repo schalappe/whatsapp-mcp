@@ -101,8 +101,9 @@ Every returned message follows the PRD shape:
 ## Development
 
 ```sh
+./scripts/lint.sh                              # Biome lint + go vet
 cd whatsapp-reader-go && go build ./...        # collector
-cd whatsapp-mcp-readonly-ts && bun test       # 27 tests: me/other separation, read-only surface, limits, redaction, e2e
+cd whatsapp-mcp-readonly-ts && bun test       # 28 tests: me/other separation, read-only surface, limits, redaction, e2e
 cd whatsapp-mcp-readonly-ts && bun run typecheck
 ```
 
