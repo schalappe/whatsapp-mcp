@@ -1,0 +1,61 @@
+# Git hooks. Needs `betterleaks` on PATH (scripts/install-betterleaks.sh) and `lefthook install` once per clone.
+# The secret scan runs before a secret reaches git; GitHub's push protection backs it up on this public repo.
+# Bypass (LEFTHOOK=0) is for emergencies; CI scans the full history anyway.
+
+pre-commit:
+  parallel: true
+  jobs:
+    # --verbose names the file and rule of each leak; the secret itself stays redacted.
+    - name: secrets
+      run: betterleaks git --pre-commit --staged --redact --verbose --no-banner
+
+    # main and develop change only through merged PRs (feature -> develop -> main). The repo's first
+    # commit is the exception: it has no branch to come from.
+    - name: protected-branch
+      run: |
+        git rev-parse -q --verify HEAD >/dev/null || exit 0
+        case "$(git branch --show-current)" in
+          main | develop)
+            echo "No commit on main or develop: branch off and open a PR."
+            exit 1
+            ;;
+        esac
+
+    - name: whatsapp-mcp-readonly-ts-format
+      root: whatsapp-mcp-readonly-ts/
+      glob: "*.{ts,tsx,js,jsx,json,css}"
+      run: bunx biome check --write --no-errors-on-unmatched --files-ignore-unknown=true {staged_files}
+      stage_fixed: true
+
+    - name: whatsapp-reader-go-format
+      root: whatsapp-reader-go/
+      glob: "*.go"
+      run: gofmt -w {staged_files}
+      stage_fixed: true
+
+commit-msg:
+  jobs:
+    - name: conventional-commit
+      run: |
+        head -n 1 {1} | grep -Eq '^((feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([a-z0-9./_-]+\))?!?: .+|Merge |Revert "|fixup! |squash! )' || {
+          echo "Commit message must follow Conventional Commits, e.g. 'fix(api): reject empty names'."
+          exit 1
+        }
+
+# git feeds one `<local ref> <local sha> <remote ref> <remote sha>` line per pushed ref. Creating a branch on
+# the remote (remote sha all zeros) is allowed; updating main or develop is not.
+pre-push:
+  jobs:
+    - name: protected-branch
+      use_stdin: true
+      run: |
+        while read -r _ _ remote_ref remote_sha; do
+          case "$remote_ref" in
+            refs/heads/main | refs/heads/develop)
+              if [ "$remote_sha" != "0000000000000000000000000000000000000000" ]; then
+                echo "No push to main or develop: merge a PR instead."
+                exit 1
+              fi
+              ;;
+          esac
+        done

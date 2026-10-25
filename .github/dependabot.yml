@@ -1,0 +1,66 @@
+version: 2
+
+# One monthly PR per ecosystem bundles every version update, to save CI minutes and review time.
+# PRs target develop, the default branch (feature -> develop -> main), security updates included.
+# Security updates are not scheduled: Dependabot opens them as soon as an advisory lands, grouped apart so
+# they never wait on a version bump. The cooldown skips releases younger than 7 days (version updates only):
+# most hijacked packages are pulled within that window.
+# The `chore(deps)` prefix keeps Dependabot's PR titles valid for the Conventional Commit check.
+# open-pull-requests-limit caps version-update PRs only (the group makes one anyway); GitHub caps security
+# PRs on its own.
+updates:
+  # One entry per area and ecosystem. `directory` is the folder holding the lockfile.
+  - package-ecosystem: bun
+    directory: /whatsapp-mcp-readonly-ts
+    schedule:
+      interval: monthly
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 1
+    commit-message:
+      prefix: chore(deps)
+    assignees: [schalappe]
+    groups:
+      bun-security:
+        applies-to: security-updates
+        patterns: ["*"]
+      bun:
+        applies-to: version-updates
+        patterns: ["*"]
+
+  - package-ecosystem: gomod
+    directory: /whatsapp-reader-go
+    schedule:
+      interval: monthly
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 1
+    commit-message:
+      prefix: chore(deps)
+    assignees: [schalappe]
+    groups:
+      gomod-security:
+        applies-to: security-updates
+        patterns: ["*"]
+      gomod:
+        applies-to: version-updates
+        patterns: ["*"]
+
+  # "/" covers .github/workflows; composite actions need their own directories.
+  - package-ecosystem: github-actions
+    directories: [/, /.github/actions/*]
+    schedule:
+      interval: monthly
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 1
+    commit-message:
+      prefix: chore(deps)
+    assignees: [schalappe]
+    groups:
+      actions-security:
+        applies-to: security-updates
+        patterns: ["*"]
+      actions:
+        applies-to: version-updates
+        patterns: ["*"]

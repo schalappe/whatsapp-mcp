@@ -1,0 +1,47 @@
+name: whatsapp-reader-go
+
+# The area's own check, the same command as locally. The `paths` filters skip this workflow when nothing
+# under whatsapp-reader-go/ changed.
+on:
+  pull_request:
+    paths:
+      - "whatsapp-reader-go/**"
+      - ".github/workflows/whatsapp-reader-go.yml"
+  push:
+    branches: [main, develop]
+    paths:
+      - "whatsapp-reader-go/**"
+      - ".github/workflows/whatsapp-reader-go.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: whatsapp-reader-go
+
+jobs:
+  check:
+    name: whatsapp-reader-go
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # go-version-file reads the `toolchain` line, so CI builds with the same patched Go as locally.
+      # go-sqlite3 needs CGO; ubuntu-latest ships gcc.
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: whatsapp-reader-go/go.mod
+          cache-dependency-path: whatsapp-reader-go/go.sum
+      - name: Format, vet, build, tests
+        run: make check
+      # `!cancelled()` reports the audit even when the check failed: one run shows every red.
+      - name: Vulnerability audit
+        if: ${{ !cancelled() }}
+        run: make audit

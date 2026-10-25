@@ -1,0 +1,80 @@
+name: Security
+
+# Repo-wide guards on every PR and every push to main and develop: secrets in the full history, and (Standard
+# tier) the workflows' own security and the PR title format.
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+  push:
+    branches: [main, develop]
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+env:
+  # Dependabot cannot see this pin (no official action); the "Betterleaks is current" step warns when a newer
+  # release exists, and the bootstrap skill's upgrade mode bumps it.
+  BETTERLEAKS_VERSION: 1.9.0
+
+jobs:
+  secrets:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install Betterleaks
+        run: |
+          scripts/install-betterleaks.sh "$BETTERLEAKS_VERSION" "$RUNNER_TEMP/bin"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: Scan the full git history
+        run: betterleaks git --redact --verbose --no-banner .
+      # A warning, not a failure: a new upstream release must not block unrelated PRs.
+      - name: Betterleaks is current
+        if: ${{ !cancelled() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          latest=$(gh api repos/betterleaks/betterleaks/releases/latest --jq '.tag_name | ltrimstr("v")')
+          if [ "$latest" != "$BETTERLEAKS_VERSION" ]; then
+            echo "::warning::Betterleaks ${latest} is out (pinned: ${BETTERLEAKS_VERSION}). Bump BETTERLEAKS_VERSION and reinstall locally."
+          fi
+
+  # Standard tier. advanced-security: false prints findings in the log: code scanning (SARIF) is not
+  # available on private repos of a free plan. The action runs the latest zizmor, on purpose: new audits
+  # land without a bump, and the job holds no secret and a read-only token. .github/zizmor.yml is its config.
+  workflows:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: zizmorcore/zizmor-action@53290badfa369cb0bf7ad16342cb62c2fa47ac7b # v0.8.0
+        with:
+          advanced-security: false
+
+  # Standard tier. Squash merges use the PR title as the commit message, so it follows the same format.
+  pr-title:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Conventional Commit title
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          if ! printf '%s' "$TITLE" | grep -Eq '^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([a-z0-9./_-]+\))?!?: .+'; then
+            echo "::error::PR title must follow Conventional Commits, e.g. 'fix(api): reject empty names'."
+            exit 1
+          fi
