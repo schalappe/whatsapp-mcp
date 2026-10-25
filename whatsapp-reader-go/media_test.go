@@ -40,7 +40,7 @@ func TestMediaMetadataPersistence(t *testing.T) {
 	defer store.Close()
 
 	ctx := context.Background()
-	if err := store.UpsertMessage(ctx, StoredMessage{
+	if _, err := store.UpsertMessage(ctx, StoredMessage{
 		ID:          "M1",
 		ChatJID:     "chat@s.whatsapp.net",
 		SenderJID:   "sender@s.whatsapp.net",

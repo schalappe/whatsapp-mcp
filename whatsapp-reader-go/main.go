@@ -22,6 +22,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/mdp/qrterminal/v3"
 	"go.mau.fi/whatsmeow"
+	waE2E "go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/proto/waHistorySync"
 	"go.mau.fi/whatsmeow/store"
 	"go.mau.fi/whatsmeow/store/sqlstore"
@@ -169,6 +170,8 @@ func (c *collector) handleEvent(evt any) {
 
 func (c *collector) storeMessage(ctx context.Context, evt *events.Message) {
 	if evt.Message != nil && evt.Message.GetProtocolMessage() != nil {
+		// Edits and revokes rewrite stored messages; other protocol messages carry no chat content.
+		c.persistMessage(ctx, evt)
 		return
 	}
 	if err := c.store.UpsertChat(ctx, evt.Info.Chat.String(), "", evt.Info.IsGroup); err != nil {
@@ -183,11 +186,22 @@ func (c *collector) storeMessage(ctx context.Context, evt *events.Message) {
 }
 
 func (c *collector) persistMessage(ctx context.Context, evt *events.Message) bool {
+	if secret := evt.Message.GetSecretEncryptedMessage(); secret != nil {
+		c.persistSecretEdit(ctx, evt, secret)
+		return false
+	}
+	if revision, ok := extractRevision(evt); ok {
+		c.persistRevision(ctx, revision)
+		return false
+	}
 	content, msgType := extractContent(evt.Message)
 	if msgType == "protocol" {
 		return false
 	}
-	err := c.store.UpsertMessage(ctx, StoredMessage{
+	if msgType == "unknown" && evt.Message != nil {
+		c.log.Infof("message %s has an unknown type (fields: %s)", evt.Info.ID, messageFields(evt.Message))
+	}
+	revoked, err := c.store.UpsertMessage(ctx, StoredMessage{
 		ID:          evt.Info.ID,
 		ChatJID:     evt.Info.Chat.String(),
 		SenderJID:   evt.Info.Sender.ToNonAD().String(),
@@ -200,8 +214,45 @@ func (c *collector) persistMessage(ctx context.Context, evt *events.Message) boo
 		c.log.Errorf("store message %s: %v", evt.Info.ID, err)
 		return false
 	}
-	c.persistMedia(ctx, evt)
+	if !revoked {
+		c.persistMedia(ctx, evt)
+	}
 	return true
+}
+
+// persistSecretEdit decrypts an edit that WhatsApp sent encrypted with the
+// original message's secret. Poll and event edits are dropped: the store keeps
+// no poll options or events to apply them to.
+func (c *collector) persistSecretEdit(ctx context.Context, evt *events.Message, secret *waE2E.SecretEncryptedMessage) {
+	if secret.GetSecretEncType() != waE2E.SecretEncryptedMessage_MESSAGE_EDIT {
+		return
+	}
+	targetID := secret.GetTargetMessageKey().GetID()
+	decrypted, err := c.client.DecryptSecretEncryptedMessage(ctx, evt)
+	if err != nil {
+		c.log.Warnf("decrypt edit of message %s: %v", targetID, err)
+		return
+	}
+	revision, ok := extractSecretEdit(evt, decrypted)
+	if !ok {
+		c.log.Warnf("skip edit %s: no target message", evt.Info.ID)
+		return
+	}
+	c.persistRevision(ctx, revision)
+}
+
+func (c *collector) persistRevision(ctx context.Context, revision StoredRevision) {
+	orphanFiles, err := c.store.SaveRevision(ctx, revision)
+	if err != nil {
+		c.log.Errorf("store %s of message %s: %v", revision.Kind, revision.MessageID, err)
+		return
+	}
+	for _, fileName := range orphanFiles {
+		err := os.Remove(filepath.Join(c.mediaDir, fileName))
+		if err != nil && !os.IsNotExist(err) {
+			c.log.Errorf("delete media of revoked message %s: %v", revision.MessageID, err)
+		}
+	}
 }
 
 func (c *collector) persistMedia(ctx context.Context, evt *events.Message) {
