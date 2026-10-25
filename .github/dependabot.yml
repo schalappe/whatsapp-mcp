@@ -1,0 +1,96 @@
+version: 2
+
+# Work flows feature -> develop -> main, so each ecosystem has two entries:
+# - version updates: one monthly PR into develop, bundling every bump. The cooldown skips releases younger
+#   than 7 days: most hijacked packages are pulled within that window.
+# - security updates: GitHub always opens them against the default branch (main), and an entry with
+#   `target-branch` stops applying its prefix and groups to them. The main entry has no target-branch and
+#   open-pull-requests-limit: 0 (no version updates), so security PRs keep the `chore(deps)` prefix and grouping.
+# The `chore(deps)` prefix keeps Dependabot's PR titles valid for the Conventional Commit check.
+updates:
+  - package-ecosystem: bun
+    directory: /whatsapp-mcp-readonly-ts
+    target-branch: develop
+    schedule:
+      interval: monthly
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 1
+    commit-message:
+      prefix: chore(deps)
+    assignees: [schalappe]
+    groups:
+      bun:
+        applies-to: version-updates
+        patterns: ["*"]
+
+  - package-ecosystem: bun
+    directory: /whatsapp-mcp-readonly-ts
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 0
+    commit-message:
+      prefix: chore(deps)
+    assignees: [schalappe]
+    groups:
+      bun-security:
+        applies-to: security-updates
+        patterns: ["*"]
+
+  - package-ecosystem: gomod
+    directory: /whatsapp-reader-go
+    target-branch: develop
+    schedule:
+      interval: monthly
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 1
+    commit-message:
+      prefix: chore(deps)
+    assignees: [schalappe]
+    groups:
+      gomod:
+        applies-to: version-updates
+        patterns: ["*"]
+
+  - package-ecosystem: gomod
+    directory: /whatsapp-reader-go
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 0
+    commit-message:
+      prefix: chore(deps)
+    assignees: [schalappe]
+    groups:
+      gomod-security:
+        applies-to: security-updates
+        patterns: ["*"]
+
+  - package-ecosystem: github-actions
+    directories: [/, /.github/actions/*]
+    target-branch: develop
+    schedule:
+      interval: monthly
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 1
+    commit-message:
+      prefix: chore(deps)
+    assignees: [schalappe]
+    groups:
+      actions:
+        applies-to: version-updates
+        patterns: ["*"]
+
+  - package-ecosystem: github-actions
+    directories: [/, /.github/actions/*]
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 0
+    commit-message:
+      prefix: chore(deps)
+    assignees: [schalappe]
+    groups:
+      actions-security:
+        applies-to: security-updates
+        patterns: ["*"]

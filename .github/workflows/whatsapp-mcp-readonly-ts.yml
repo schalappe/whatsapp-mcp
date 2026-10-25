@@ -1,0 +1,46 @@
+name: whatsapp-mcp-readonly-ts
+
+# The area's own check, the same command as locally. The `paths` filters skip this workflow when nothing
+# under whatsapp-mcp-readonly-ts/ changed.
+on:
+  pull_request:
+    paths:
+      - "whatsapp-mcp-readonly-ts/**"
+      - ".github/workflows/whatsapp-mcp-readonly-ts.yml"
+      - ".github/actions/setup-bun-env/**"
+  push:
+    branches: [main, develop]
+    paths:
+      - "whatsapp-mcp-readonly-ts/**"
+      - ".github/workflows/whatsapp-mcp-readonly-ts.yml"
+      - ".github/actions/setup-bun-env/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: whatsapp-mcp-readonly-ts
+
+jobs:
+  check:
+    name: whatsapp-mcp-readonly-ts
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-bun-env
+        with:
+          working-directory: whatsapp-mcp-readonly-ts
+      - name: Lint, format, types, tests
+        run: bun run check
+      # `!cancelled()` reports the audit even when the check failed: one run shows every red.
+      - name: Dependency audit
+        if: ${{ !cancelled() }}
+        run: bun run audit

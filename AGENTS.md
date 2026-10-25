@@ -17,9 +17,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Run all relevant checks after cross-component changes:
 
 ```sh
-./scripts/lint.sh
-(cd whatsapp-mcp-readonly-ts && bun test && bun run typecheck)
-(cd whatsapp-reader-go && go build ./...)
+make check   # both components: format, lint, types, build, tests
+make audit   # govulncheck + bun audit
 ```
 
 Start locally from the repository root with `./scripts/start-collector.sh [--request-full-sync]` and `./scripts/start-mcp-server.sh`.

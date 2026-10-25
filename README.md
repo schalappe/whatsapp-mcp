@@ -14,7 +14,7 @@ WhatsApp (multi-device) ──> whatsapp-reader-go ──> SQLite (local) ──
 ## Prerequisites
 
 - Go 1.21+ (the build auto-downloads the required toolchain)
-- [Bun](https://bun.sh) 1.x
+- [Bun](https://bun.sh) 1.4+
 - A personal WhatsApp account on your phone
 
 ## 1. Sync your WhatsApp history
@@ -106,12 +106,20 @@ Every returned message follows the PRD shape:
 
 ## Development
 
+Tools: Go, [Bun](https://bun.sh), [uv](https://docs.astral.sh/uv/), and two hook tools, once per machine:
+
 ```sh
-./scripts/lint.sh                              # Biome lint + go vet
-cd whatsapp-reader-go && go build ./...        # collector
-cd whatsapp-mcp-readonly-ts && bun test       # 28 tests: me/other separation, read-only surface, limits, redaction, e2e
-cd whatsapp-mcp-readonly-ts && bun run typecheck
+uv tool install lefthook
+scripts/install-betterleaks.sh 1.9.0 ~/.local/bin   # secret scanner used by the pre-commit hook
+lefthook install                                    # once per clone
 ```
+
+```sh
+make check   # gofmt, go vet, build, Go tests; Biome lint + format, tsc, 30 Bun tests
+make audit   # govulncheck + bun audit
+```
+
+CI runs the same commands per component. `main` and `develop` change only through PRs (feature → develop → main).
 
 ## Revoking access & deleting local data
 
