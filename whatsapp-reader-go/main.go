@@ -9,6 +9,8 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"flag"
 	"fmt"
 	"os"
@@ -30,10 +32,16 @@ import (
 )
 
 type collector struct {
-	client *whatsmeow.Client
-	store  *MessageStore
-	log    waLog.Logger
+	client   *whatsmeow.Client
+	store    *MessageStore
+	mediaDir string
+	log      waLog.Logger
 }
+
+const (
+	maxMediaFileBytes = 25 << 20
+	mediaDownloadTime = 30 * time.Second
+)
 
 func main() {
 	defaultDataDir := ""
@@ -58,6 +66,13 @@ func main() {
 func run(dataDir string, fullSync, verbose bool) error {
 	if err := os.MkdirAll(dataDir, 0o700); err != nil {
 		return fmt.Errorf("create data dir: %w", err)
+	}
+	mediaDir := filepath.Join(dataDir, "media")
+	if err := os.MkdirAll(mediaDir, 0o700); err != nil {
+		return fmt.Errorf("create media dir: %w", err)
+	}
+	if err := os.Chmod(mediaDir, 0o700); err != nil {
+		return fmt.Errorf("restrict media dir permissions: %w", err)
 	}
 
 	logLevel := "INFO"
@@ -96,7 +111,12 @@ func run(dataDir string, fullSync, verbose bool) error {
 	defer msgStore.Close()
 
 	client := whatsmeow.NewClient(device, waLog.Stdout("Client", logLevel, true))
-	c := &collector{client: client, store: msgStore, log: log}
+	c := &collector{
+		client:   client,
+		store:    msgStore,
+		mediaDir: mediaDir,
+		log:      log,
+	}
 	client.AddEventHandler(c.handleEvent)
 
 	if client.Store.ID == nil {
@@ -148,9 +168,7 @@ func (c *collector) handleEvent(evt any) {
 }
 
 func (c *collector) storeMessage(ctx context.Context, evt *events.Message) {
-	content, msgType := extractContent(evt.Message)
-	if msgType == "protocol" {
-		// App-state / edit / revoke envelopes, not user-visible messages.
+	if evt.Message != nil && evt.Message.GetProtocolMessage() != nil {
 		return
 	}
 	if err := c.store.UpsertChat(ctx, evt.Info.Chat.String(), "", evt.Info.IsGroup); err != nil {
@@ -160,6 +178,14 @@ func (c *collector) storeMessage(ctx context.Context, evt *events.Message) {
 		if err := c.store.UpsertContact(ctx, evt.Info.Sender.ToNonAD().String(), evt.Info.PushName); err != nil {
 			c.log.Errorf("upsert contact %s: %v", evt.Info.Sender, err)
 		}
+	}
+	c.persistMessage(ctx, evt)
+}
+
+func (c *collector) persistMessage(ctx context.Context, evt *events.Message) bool {
+	content, msgType := extractContent(evt.Message)
+	if msgType == "protocol" {
+		return false
 	}
 	err := c.store.UpsertMessage(ctx, StoredMessage{
 		ID:          evt.Info.ID,
@@ -172,6 +198,90 @@ func (c *collector) storeMessage(ctx context.Context, evt *events.Message) {
 	})
 	if err != nil {
 		c.log.Errorf("store message %s: %v", evt.Info.ID, err)
+		return false
+	}
+	c.persistMedia(ctx, evt)
+	return true
+}
+
+func (c *collector) persistMedia(ctx context.Context, evt *events.Message) {
+	media := extractMedia(evt.Message)
+	if media == nil || media.viewOnce || media.sizeBytes > maxMediaFileBytes {
+		return
+	}
+	fileHash := media.message.GetFileSHA256()
+	if len(fileHash) != sha256.Size {
+		c.log.Warnf("skip media for message %s: invalid SHA-256", evt.Info.ID)
+		return
+	}
+	fileName := hex.EncodeToString(fileHash)
+	finalPath := filepath.Join(c.mediaDir, fileName)
+	if info, err := os.Stat(finalPath); err == nil {
+		if info.Size() <= 0 || info.Size() > maxMediaFileBytes {
+			c.log.Warnf("skip media for message %s: invalid stored size", evt.Info.ID)
+			return
+		}
+		c.persistMediaMetadata(ctx, evt, media, fileName, info.Size())
+		return
+	} else if !os.IsNotExist(err) {
+		c.log.Errorf("inspect media for message %s: %v", evt.Info.ID, err)
+		return
+	}
+
+	temp, err := os.CreateTemp(c.mediaDir, ".download-*")
+	if err != nil {
+		c.log.Errorf("create media file for message %s: %v", evt.Info.ID, err)
+		return
+	}
+	tempPath := temp.Name()
+	defer os.Remove(tempPath)
+
+	downloadCtx, cancel := context.WithTimeout(ctx, mediaDownloadTime)
+	err = c.client.DownloadToFile(downloadCtx, media.message, temp)
+	cancel()
+	if err != nil {
+		temp.Close()
+		c.log.Warnf("download media for message %s: %v", evt.Info.ID, err)
+		return
+	}
+	info, err := temp.Stat()
+	if err != nil || info.Size() > maxMediaFileBytes {
+		temp.Close()
+		c.log.Warnf("skip media for message %s: invalid downloaded size", evt.Info.ID)
+		return
+	}
+	if err := temp.Close(); err != nil {
+		c.log.Errorf("close media for message %s: %v", evt.Info.ID, err)
+		return
+	}
+	if err := os.Rename(tempPath, finalPath); err != nil {
+		c.log.Errorf("store media for message %s: %v", evt.Info.ID, err)
+		return
+	}
+	if err := os.Chmod(finalPath, 0o600); err != nil {
+		c.log.Errorf("restrict media for message %s: %v", evt.Info.ID, err)
+		return
+	}
+	c.persistMediaMetadata(ctx, evt, media, fileName, info.Size())
+}
+
+func (c *collector) persistMediaMetadata(
+	ctx context.Context,
+	evt *events.Message,
+	media *extractedMedia,
+	fileName string,
+	sizeBytes int64,
+) {
+	err := c.store.UpsertMedia(ctx, StoredMedia{
+		MessageID:       evt.Info.ID,
+		ChatJID:         evt.Info.Chat.String(),
+		MIMEType:        media.mimeType,
+		SizeBytes:       sizeBytes,
+		DurationSeconds: media.durationSeconds,
+		FileName:        fileName,
+	})
+	if err != nil {
+		c.log.Errorf("store media metadata for message %s: %v", evt.Info.ID, err)
 	}
 }
 
@@ -194,24 +304,9 @@ func (c *collector) handleHistorySync(ctx context.Context, data *waHistorySync.H
 			if err != nil {
 				continue
 			}
-			content, msgType := extractContent(msgEvt.Message)
-			if msgType == "protocol" {
-				continue
+			if c.persistMessage(ctx, msgEvt) {
+				stored++
 			}
-			err = c.store.UpsertMessage(ctx, StoredMessage{
-				ID:          msgEvt.Info.ID,
-				ChatJID:     chatJID.String(),
-				SenderJID:   msgEvt.Info.Sender.ToNonAD().String(),
-				IsFromMe:    msgEvt.Info.IsFromMe,
-				Timestamp:   msgEvt.Info.Timestamp,
-				Content:     content,
-				MessageType: msgType,
-			})
-			if err != nil {
-				c.log.Errorf("store history message %s: %v", msgEvt.Info.ID, err)
-				continue
-			}
-			stored++
 		}
 	}
 	c.log.Infof("History sync: stored %d messages", stored)

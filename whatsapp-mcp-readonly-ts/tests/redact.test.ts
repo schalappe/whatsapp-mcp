@@ -68,8 +68,8 @@ describe("redaction", () => {
       chat_id: ALICE_CHAT,
       query: "appelle",
     });
-    expect(result.messages[0]!.content).toContain("[phone-redacted]");
-    expect(result.messages[0]!.content).not.toContain("12 34 56 78");
+    expect(result.messages[0]?.content).toContain("[phone-redacted]");
+    expect(result.messages[0]?.content).not.toContain("12 34 56 78");
   });
 
   test("redacted chat ids remain usable in follow-up calls", () => {
@@ -79,7 +79,9 @@ describe("redaction", () => {
       },
     });
     const chats = handleListChats(ctx, {});
-    const aliceRedacted = chats.chats.find((c) => c.name === "Alice")!.id;
+    const aliceRedacted = chats.chats.find((c) => c.name === "Alice")?.id;
+    expect(aliceRedacted).toBeDefined();
+    if (!aliceRedacted) throw new Error("missing Alice chat");
     expect(aliceRedacted.startsWith("redacted-")).toBe(true);
     const summary = handleGetChatSummaryInput(ctx, { chat_id: aliceRedacted });
     expect(summary.window.returned).toBe(3);

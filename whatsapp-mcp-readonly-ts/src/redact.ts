@@ -9,7 +9,7 @@ const USER_JID_RE = /^(\+?\d+)(?:[.:][\d]+)?@(s\.whatsapp\.net|lid|c\.us)$/;
 // [!]: legacy groups = <creator-phone>-<timestamp>@g.us -> phone leaks; modern ids (no dash) hold none
 const LEGACY_GROUP_JID_RE = /^\d+-\d+@g\.us$/;
 // [>]: phone-looking digit runs in free text
-const PHONE_IN_TEXT_RE = /\+?\d[\d\s().\-]{5,}\d/g;
+const PHONE_IN_TEXT_RE = /\+?\d[\d\s().-]{5,}\d/g;
 
 function jidHash(jid: string): string {
   return createHash("sha256").update(jid).digest("hex").slice(0, 10);
@@ -21,8 +21,10 @@ function jidHash(jid: string): string {
  */
 export function redactJid(jid: string): string {
   const match = USER_JID_RE.exec(jid);
-  if (match) {
-    return `redacted-${jidHash(match[1]! + "@" + match[2]!)}@${match[2]}`;
+  const user = match?.[1];
+  const domain = match?.[2];
+  if (user && domain) {
+    return `redacted-${jidHash(`${user}@${domain}`)}@${domain}`;
   }
   if (LEGACY_GROUP_JID_RE.test(jid)) {
     return `redacted-${jidHash(jid)}@g.us`;
@@ -60,6 +62,12 @@ export interface RedactedMessage {
   sender_display_name: string;
   content: string;
   message_type: string;
+  media?: {
+    available: boolean;
+    mime_type: string | null;
+    size_bytes: number | null;
+    duration_seconds: number | null;
+  };
 }
 
 export function applyRedaction(

@@ -2,13 +2,16 @@
  * @module tests/fixtures
  * Builds throwaway SQLite databases mirroring the whatsapp-reader-go schema.
  */
-import { Database } from "bun:sqlite";
-import { mkdtempSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { Database } from "bun:sqlite";
 import { defaultConfig, type Config } from "../src/config.ts";
 import { ReadOnlyDb } from "../src/db.ts";
 import type { ToolContext } from "../src/tools.ts";
+
+type AuditEntry = Parameters<ToolContext["audit"]["log"]>[0];
 
 // [!]: must stay in sync with whatsapp-reader-go/store.go
 const SCHEMA = `
@@ -32,6 +35,17 @@ CREATE TABLE messages (
   message_type TEXT NOT NULL DEFAULT 'text',
   PRIMARY KEY (id, chat_jid)
 );
+CREATE TABLE message_media (
+  message_id TEXT NOT NULL,
+  chat_jid TEXT NOT NULL,
+  mime_type TEXT NOT NULL,
+  size_bytes INTEGER NOT NULL,
+  duration_seconds INTEGER,
+  file_name TEXT NOT NULL,
+  PRIMARY KEY (message_id, chat_jid),
+  FOREIGN KEY (message_id, chat_jid)
+    REFERENCES messages(id, chat_jid) ON DELETE CASCADE
+);
 CREATE TABLE sync_metadata (key TEXT PRIMARY KEY, value TEXT);
 `;
 
@@ -49,6 +63,11 @@ export interface FixtureMessage {
   ts: string;
   content: string;
   type?: string;
+  media?: {
+    mimeType: string;
+    data: Uint8Array;
+    durationSeconds?: number;
+  };
 }
 
 export function seedDatabase(path: string, messages: FixtureMessage[]): void {
@@ -69,6 +88,12 @@ export function seedDatabase(path: string, messages: FixtureMessage[]): void {
   const touch = db.prepare(
     `UPDATE chats SET last_message_at = MAX(COALESCE(last_message_at, ''), ?) WHERE jid = ?`,
   );
+  const insertMedia = db.prepare(
+    `INSERT INTO message_media (
+       message_id, chat_jid, mime_type, size_bytes, duration_seconds, file_name
+     ) VALUES (?, ?, ?, ?, ?, ?)`,
+  );
+  const mediaDir = join(dirname(path), "media");
   for (const m of messages) {
     insert.run(
       m.id,
@@ -80,6 +105,19 @@ export function seedDatabase(path: string, messages: FixtureMessage[]): void {
       m.type ?? "text",
     );
     touch.run(m.ts, m.chat);
+    if (m.media) {
+      const fileName = createHash("sha256").update(m.media.data).digest("hex");
+      mkdirSync(mediaDir, { recursive: true, mode: 0o700 });
+      writeFileSync(join(mediaDir, fileName), m.media.data, { mode: 0o600 });
+      insertMedia.run(
+        m.id,
+        m.chat,
+        m.media.mimeType,
+        m.media.data.byteLength,
+        m.media.durationSeconds ?? null,
+        fileName,
+      );
+    }
   }
   db.close();
 }
@@ -140,7 +178,7 @@ export function defaultMessages(): FixtureMessage[] {
 export function makeContext(overrides?: {
   config?: (config: Config) => void;
   messages?: FixtureMessage[];
-}): { ctx: ToolContext; dbPath: string; auditEntries: any[] } {
+}): { ctx: ToolContext; dbPath: string; auditEntries: AuditEntry[] } {
   const dir = mkdtempSync(join(tmpdir(), "wamcp-test-"));
   const dbPath = join(dir, "messages.db");
   seedDatabase(dbPath, overrides?.messages ?? defaultMessages());
@@ -148,7 +186,7 @@ export function makeContext(overrides?: {
   config.whatsapp.database_path = dbPath;
   config.audit.enabled = false;
   overrides?.config?.(config);
-  const auditEntries: any[] = [];
+  const auditEntries: AuditEntry[] = [];
   return {
     ctx: {
       db: new ReadOnlyDb(dbPath),
