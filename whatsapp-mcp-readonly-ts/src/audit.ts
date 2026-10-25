@@ -32,7 +32,7 @@ export function createAuditLogger(audit: Config["audit"]): AuditLogger {
 		log(entry) {
 			const line = JSON.stringify({ ts: new Date().toISOString(), ...entry });
 			try {
-				appendFileSync(audit.log_path, line + "\n", { mode: 0o600 });
+				appendFileSync(audit.log_path, `${line}\n`, { mode: 0o600 });
 			} catch (err) {
 				// [!]: audit failure must not break reads; stays visible on stderr
 				console.error(`audit log write failed: ${err}`);

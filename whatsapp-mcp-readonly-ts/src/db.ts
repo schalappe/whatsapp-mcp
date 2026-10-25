@@ -92,7 +92,7 @@ export class ReadOnlyDb {
       SELECT ch.jid, COALESCE(ch.name, co.display_name) AS name, ch.is_group, ch.last_message_at
       FROM chats ch
       LEFT JOIN contacts co ON co.jid = ch.jid
-      ${where.length ? "WHERE " + where.join(" AND ") : ""}
+      ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
       ORDER BY COALESCE(ch.last_message_at, '') DESC, ch.jid ASC
       LIMIT ? OFFSET ?`;
 		params.push(opts.limit, opts.offset);
@@ -141,7 +141,7 @@ export class ReadOnlyDb {
 			params.push(opts.cursor.ts, opts.cursor.ts, opts.cursor.id);
 		}
 		const sql = `${MESSAGE_SELECT}
-      ${where.length ? "WHERE " + where.join(" AND ") : ""}
+      ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
       ORDER BY m.timestamp DESC, m.id DESC
       LIMIT ?`;
 		params.push(opts.limit);
