@@ -39,6 +39,17 @@ CREATE TABLE IF NOT EXISTS messages (
 	PRIMARY KEY (id, chat_jid)
 );
 
+CREATE TABLE IF NOT EXISTS message_media (
+	message_id       TEXT NOT NULL,
+	chat_jid         TEXT NOT NULL,
+	mime_type        TEXT NOT NULL,
+	size_bytes       INTEGER NOT NULL,
+	duration_seconds INTEGER,
+	file_name        TEXT NOT NULL,
+	PRIMARY KEY (message_id, chat_jid),
+	FOREIGN KEY (message_id, chat_jid) REFERENCES messages(id, chat_jid) ON DELETE CASCADE
+);
+
 CREATE INDEX IF NOT EXISTS idx_messages_chat_ts ON messages (chat_jid, timestamp);
 CREATE INDEX IF NOT EXISTS idx_messages_ts ON messages (timestamp);
 
@@ -77,6 +88,30 @@ type StoredMessage struct {
 	Timestamp   time.Time
 	Content     string
 	MessageType string
+}
+
+type StoredMedia struct {
+	MessageID       string
+	ChatJID         string
+	MIMEType        string
+	SizeBytes       int64
+	DurationSeconds uint32
+	FileName        string
+}
+
+func (s *MessageStore) UpsertMedia(ctx context.Context, m StoredMedia) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO message_media (
+			message_id, chat_jid, mime_type, size_bytes, duration_seconds, file_name
+		)
+		VALUES (?, ?, ?, ?, NULLIF(?, 0), ?)
+		ON CONFLICT(message_id, chat_jid) DO UPDATE SET
+			mime_type = excluded.mime_type,
+			size_bytes = excluded.size_bytes,
+			duration_seconds = excluded.duration_seconds,
+			file_name = excluded.file_name`,
+		m.MessageID, m.ChatJID, m.MIMEType, m.SizeBytes, m.DurationSeconds, m.FileName)
+	return err
 }
 
 func (s *MessageStore) UpsertMessage(ctx context.Context, m StoredMessage) error {

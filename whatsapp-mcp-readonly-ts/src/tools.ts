@@ -4,6 +4,7 @@
  */
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { ContentBlock } from "@modelcontextprotocol/sdk/types.js";
 import type { Config } from "./config.ts";
 import type { AuditLogger } from "./audit.ts";
 import { type ReadOnlyDb, toMessageOut, type MessageRow } from "./db.ts";
@@ -64,8 +65,104 @@ function clampLimit(
   return Math.max(1, Math.min(max, Math.floor(base)));
 }
 
+const MAX_MEDIA_ITEMS_PER_CALL = 3;
+const MAX_MEDIA_BYTES_PER_CALL = 25 << 20;
+
 function redact(ctx: ToolContext, row: MessageRow): RedactedMessage {
   return applyRedaction(toMessageOut(row), ctx.config.privacy);
+}
+
+interface IncludeMediaArgs {
+  chat_id?: unknown;
+  include_media?: unknown;
+  max_media_items?: unknown;
+}
+
+async function mediaContentBlocks(
+  ctx: ToolContext,
+  args: IncludeMediaArgs,
+  result: Record<string, unknown>,
+): Promise<ContentBlock[]> {
+  if (args.include_media !== true || typeof args.chat_id !== "string") {
+    return [];
+  }
+  const chatJid = requireChatAccess(ctx, args.chat_id);
+  const messages = Array.isArray(result.messages) ? result.messages : [];
+  const requested =
+    typeof args.max_media_items === "number"
+      ? args.max_media_items
+      : undefined;
+  const maxItems = clampLimit(
+    requested,
+    MAX_MEDIA_ITEMS_PER_CALL,
+    MAX_MEDIA_ITEMS_PER_CALL,
+  );
+  const blocks: ContentBlock[] = [];
+  let itemCount = 0;
+  let remainingBytes = MAX_MEDIA_BYTES_PER_CALL;
+
+  for (const message of messages) {
+    if (itemCount >= maxItems || remainingBytes <= 0) {
+      break;
+    }
+    if (
+      typeof message !== "object" ||
+      message === null ||
+      !("id" in message) ||
+      typeof message.id !== "string"
+    ) {
+      continue;
+    }
+    const row = ctx.db.getMessage(chatJid, message.id);
+    const mediaType =
+      row?.message_type === "image" &&
+      row.media_mime_type?.startsWith("image/")
+        ? "image"
+        : row?.message_type === "audio" &&
+            row.media_mime_type?.startsWith("audio/")
+          ? "audio"
+          : null;
+    if (
+      !row?.media_file_name ||
+      !row.media_mime_type ||
+      !row.media_size_bytes ||
+      row.media_size_bytes > remainingBytes ||
+      !mediaType
+    ) {
+      continue;
+    }
+    const path = ctx.db.resolveMediaPath(row.media_file_name);
+    if (!path) {
+      continue;
+    }
+    try {
+      const file = Bun.file(path);
+      if (
+        !(await file.exists()) ||
+        file.size === 0 ||
+        file.size > remainingBytes
+      ) {
+        continue;
+      }
+      const bytes = await file.arrayBuffer();
+      if (bytes.byteLength === 0 || bytes.byteLength > remainingBytes) {
+        continue;
+      }
+      blocks.push(
+        { type: "text", text: `Media for message ${row.id}` },
+        {
+          type: mediaType,
+          data: Buffer.from(bytes).toString("base64"),
+          mimeType: row.media_mime_type,
+        },
+      );
+      itemCount++;
+      remainingBytes -= bytes.byteLength;
+    } catch {
+      // [>]: stale/deleted file -> omit attachment
+    }
+  }
+  return blocks;
 }
 
 // ---------------------------------------------------------------- list_chats
@@ -196,6 +293,8 @@ export interface GetThreadContextArgs {
   before?: string;
   limit_before?: number;
   limit_after?: number;
+  include_media?: boolean;
+  max_media_items?: number;
 }
 
 export function handleGetThreadContext(
@@ -254,6 +353,8 @@ export interface GetChatSummaryInputArgs {
   after?: string;
   before?: string;
   max_messages?: number;
+  include_media?: boolean;
+  max_media_items?: number;
 }
 
 export function handleGetChatSummaryInput(
@@ -349,11 +450,17 @@ export function registerTools(server: McpServer, ctx: ToolContext): string[] {
           result_count: count,
           duration_ms: Math.round(performance.now() - started),
         });
-        return {
-          content: [
-            { type: "text" as const, text: JSON.stringify(result, null, 2) },
-          ],
-        };
+        const content: ContentBlock[] = [
+          { type: "text", text: JSON.stringify(result, null, 2) },
+        ];
+        content.push(
+          ...(await mediaContentBlocks(
+            ctx,
+            args as IncludeMediaArgs,
+            result,
+          )),
+        );
+        return { content };
       } catch (err) {
         const outcome = err instanceof ToolError ? err.outcome : "error";
         const message = err instanceof Error ? err.message : String(err);
@@ -476,6 +583,17 @@ export function registerTools(server: McpServer, ctx: ToolContext): string[] {
           .positive()
           .optional()
           .describe("Messages after the anchor"),
+        include_media: z
+          .boolean()
+          .optional()
+          .describe("Attach available image/audio content blocks"),
+        max_media_items: z
+          .number()
+          .int()
+          .positive()
+          .max(MAX_MEDIA_ITEMS_PER_CALL)
+          .optional()
+          .describe("Max media attachments; hard cap 3"),
       },
     },
     wrap("get_thread_context", handleGetThreadContext),
@@ -499,6 +617,17 @@ export function registerTools(server: McpServer, ctx: ToolContext): string[] {
           .positive()
           .optional()
           .describe("Max messages to include"),
+        include_media: z
+          .boolean()
+          .optional()
+          .describe("Attach available image/audio content blocks"),
+        max_media_items: z
+          .number()
+          .int()
+          .positive()
+          .max(MAX_MEDIA_ITEMS_PER_CALL)
+          .optional()
+          .describe("Max media attachments; hard cap 3"),
       },
     },
     wrap("get_chat_summary_input", handleGetChatSummaryInput),

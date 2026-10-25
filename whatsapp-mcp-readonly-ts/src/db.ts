@@ -3,6 +3,7 @@
  * Read-only SQLite queries over collector schema; keyset pagination.
  */
 import { Database } from "bun:sqlite";
+import { dirname, join } from "node:path";
 import type { RedactedMessage } from "./redact.ts";
 
 export interface MessageRow {
@@ -15,6 +16,10 @@ export interface MessageRow {
   message_type: string;
   sender_display_name: string | null;
   chat_name: string | null;
+  media_mime_type: string | null;
+  media_size_bytes: number | null;
+  media_duration_seconds: number | null;
+  media_file_name: string | null;
 }
 
 export interface ChatRow {
@@ -28,23 +33,39 @@ const MESSAGE_SELECT = `
   SELECT m.id, m.chat_jid, m.sender_jid, m.is_from_me, m.timestamp,
          m.content, m.message_type,
          c.display_name AS sender_display_name,
-         ch.name AS chat_name
+         ch.name AS chat_name,
+         mm.mime_type AS media_mime_type,
+         mm.size_bytes AS media_size_bytes,
+         mm.duration_seconds AS media_duration_seconds,
+         mm.file_name AS media_file_name
   FROM messages m
   LEFT JOIN contacts c ON c.jid = m.sender_jid
   LEFT JOIN chats ch ON ch.jid = m.chat_jid
+  LEFT JOIN message_media mm ON mm.message_id = m.id AND mm.chat_jid = m.chat_jid
 `;
 
 /** Read-only view over SQLite written by whatsapp-reader-go. */
 export class ReadOnlyDb {
   private db: Database;
 
-  constructor(path: string) {
-    // [!]: readonly -> SQLite itself rejects any write statement
+  constructor(private readonly path: string) {
+    // [!]: readonly -> SQLite rejects writes
     this.db = new Database(path, { readonly: true });
   }
 
   close(): void {
     this.db.close();
+  }
+
+  /**
+   * Resolve collector-owned media filename.
+   * @param fileName - SHA-256 hex filename.
+   * @returns Absolute path; null for invalid filename.
+   */
+  resolveMediaPath(fileName: string): string | null {
+    return /^[a-f0-9]{64}$/.test(fileName)
+      ? join(dirname(this.path), "media", fileName)
+      : null;
   }
 
   allChatJids(): string[] {
@@ -243,5 +264,15 @@ export function toMessageOut(row: MessageRow): RedactedMessage {
         : (row.sender_display_name ?? row.chat_name ?? row.sender_jid),
     content: row.content ?? "",
     message_type: row.message_type,
+    ...(row.message_type === "image" || row.message_type === "audio"
+      ? {
+          media: {
+            available: row.media_file_name !== null,
+            mime_type: row.media_mime_type,
+            size_bytes: row.media_size_bytes,
+            duration_seconds: row.media_duration_seconds,
+          },
+        }
+      : {}),
   };
 }

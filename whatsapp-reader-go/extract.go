@@ -1,12 +1,11 @@
 package main
 
 import (
+	"go.mau.fi/whatsmeow"
 	waE2E "go.mau.fi/whatsmeow/proto/waE2E"
 )
 
-// extractContent maps a decrypted WhatsApp message onto a (content, type)
-// pair for storage. Media is never downloaded (read-only, metadata only):
-// for media messages only the caption and the media kind are kept.
+// extractContent maps decrypted message to stored text and type.
 func extractContent(msg *waE2E.Message) (content string, messageType string) {
 	if msg == nil {
 		return "", "unknown"
@@ -43,4 +42,44 @@ func extractContent(msg *waE2E.Message) (content string, messageType string) {
 	default:
 		return "", "unknown"
 	}
+}
+
+type extractedMedia struct {
+	message         whatsmeow.DownloadableMessage
+	mimeType        string
+	sizeBytes       uint64
+	durationSeconds uint32
+	viewOnce        bool
+}
+
+func extractMedia(msg *waE2E.Message) *extractedMedia {
+	if msg == nil {
+		return nil
+	}
+	if image := msg.GetImageMessage(); image != nil {
+		mimeType := image.GetMimetype()
+		if mimeType == "" {
+			mimeType = "image/jpeg"
+		}
+		return &extractedMedia{
+			message:   image,
+			mimeType:  mimeType,
+			sizeBytes: image.GetFileLength(),
+			viewOnce:  image.GetViewOnce(),
+		}
+	}
+	if audio := msg.GetAudioMessage(); audio != nil {
+		mimeType := audio.GetMimetype()
+		if mimeType == "" {
+			mimeType = "audio/ogg"
+		}
+		return &extractedMedia{
+			message:         audio,
+			mimeType:        mimeType,
+			sizeBytes:       audio.GetFileLength(),
+			durationSeconds: audio.GetSeconds(),
+			viewOnce:        audio.GetViewOnce(),
+		}
+	}
+	return nil
 }

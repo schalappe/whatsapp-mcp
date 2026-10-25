@@ -62,6 +62,12 @@ export interface RedactedMessage {
   sender_display_name: string;
   content: string;
   message_type: string;
+  media?: {
+    available: boolean;
+    mime_type: string | null;
+    size_bytes: number | null;
+    duration_seconds: number | null;
+  };
 }
 
 export function applyRedaction(

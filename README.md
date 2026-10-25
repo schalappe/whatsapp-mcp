@@ -9,7 +9,7 @@ WhatsApp (multi-device) ──> whatsapp-reader-go ──> SQLite (local) ──
 
 - **No write path**: the collector never calls any send API; the MCP server opens SQLite in read-only mode and exposes zero write tools (enforced by tests and a startup check).
 - **No network exposure**: MCP over stdio only; everything stays on your machine.
-- **Bounded**: every call is capped (`max_messages_per_call`), unbounded searches are refused, all calls land in a local audit log.
+- **Bounded**: message calls are capped (`max_messages_per_call`), media is opt-in and capped at 3 items/25 MiB per call, unbounded searches are refused, and all calls land in a local audit log.
 
 ## Prerequisites
 
@@ -23,7 +23,7 @@ WhatsApp (multi-device) ──> whatsapp-reader-go ──> SQLite (local) ──
 ./scripts/start-collector.sh                     # add --request-full-sync before first pairing for deeper history
 ```
 
-On first run a QR code is printed: scan it from your phone (WhatsApp > Settings > Linked Devices > Link a Device). The collector then mirrors incoming messages and history syncs into `~/.local/share/whatsapp-reader/messages.db` (file mode 0600). Leave it running in a terminal or under a process manager; it resumes syncing on restart.
+On first run a QR code is printed: scan it from your phone (WhatsApp > Settings > Linked Devices > Link a Device). The collector then mirrors incoming messages and history syncs into `~/.local/share/whatsapp-reader/messages.db` (file mode 0600). Images and audio up to 25 MiB are stored under the owner-only `media/` directory; view-once media is skipped. Leave the collector running in a terminal or under a process manager; it resumes syncing on restart.
 
 Flags: `--data-dir DIR` (default `~/.local/share/whatsapp-reader`), `--request-full-sync`, `--verbose`.
 
@@ -80,8 +80,8 @@ claude mcp add whatsapp-readonly -e WHATSAPP_MCP_CONFIG=$HOME/.config/whatsapp-m
 | --- | --- | --- |
 | `list_chats` | List conversations, most recent first (`query`, `cursor`, `include_last_message`) | — |
 | `search_messages` | Search messages (`chat_id`, `query`, `after`, `before`, `sender_role`, `cursor`) | at least one filter |
-| `get_thread_context` | Messages around a message id or within a period, chronological | anchor or period |
-| `get_chat_summary_input` | Bounded structured extract of one chat (participants, window stats, messages) | `chat_id` |
+| `get_thread_context` | Messages around a message id or within a period; optionally attach up to 3 image/audio blocks with `include_media` | anchor or period |
+| `get_chat_summary_input` | Bounded structured extract; optionally attach up to 3 image/audio blocks with `include_media` | `chat_id` |
 
 Every returned message follows the PRD shape:
 
@@ -93,8 +93,14 @@ Every returned message follows the PRD shape:
   "role": "me",
   "sender_jid": "xxx@s.whatsapp.net",
   "sender_display_name": "Alice",
-  "content": "message text",
-  "message_type": "text"
+  "content": "photo caption",
+  "message_type": "image",
+  "media": {
+    "available": true,
+    "mime_type": "image/jpeg",
+    "size_bytes": 284513,
+    "duration_seconds": null
+  }
 }
 ```
 
@@ -125,4 +131,4 @@ rm -rf ~/.config/whatsapp-mcp             # server config, if created
 - Read-only by design: no `send_message`/`delete_message`/upload tool exists anywhere in the codebase; the server refuses to start if a write-looking tool is ever registered, and SQLite is opened `readonly`.
 - Local only: stdio transport, no HTTP listener, no telemetry.
 - Restrictive permissions: data dir `0700`, databases and audit log `0600`.
-- Media is not downloaded; only its kind (image/video/…) and caption are stored.
+- Image/audio downloads are passive reads through the authenticated WhatsApp session. Files stay local (`0600`), are never named from message content, and are returned only after chat access checks. Expired history media is not re-uploaded or retried.
