@@ -104,6 +104,8 @@ Every returned message follows the PRD shape:
 }
 ```
 
+`content` holds the latest edit, while `timestamp` keeps the original send time. A message deleted for everyone returns `"message_type": "revoked"` with empty `content`, and the collector deletes its media.
+
 ## Development
 
 Tools: Go, [Bun](https://bun.sh), [uv](https://docs.astral.sh/uv/), and two hook tools, once per machine:
