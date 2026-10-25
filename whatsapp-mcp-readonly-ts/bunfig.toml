@@ -1,0 +1,3 @@
+[install]
+# Refuse releases younger than 7 days (in seconds); most hijacked packages are pulled within that window.
+minimumReleaseAge = 604800

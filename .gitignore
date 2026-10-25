@@ -8,3 +8,11 @@ whatsapp-reader-go/whatsapp-reader-go
 *.db-shm
 audit.log
 config.toml
+
+# Node
+node_modules/
+
+# Environment files
+.env
+.env.*
+!.env.example

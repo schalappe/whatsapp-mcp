@@ -4,11 +4,11 @@
  * User dates normalized to same shape before SQL comparison.
  */
 export function normalizeTimestamp(input: string, param: string): string {
-  const ms = Date.parse(input);
-  if (Number.isNaN(ms)) {
-    throw new Error(
-      `invalid ${param}: ${JSON.stringify(input)} is not a parseable date`,
-    );
-  }
-  return new Date(ms).toISOString().replace(/\.\d{3}Z$/, "Z");
+	const ms = Date.parse(input);
+	if (Number.isNaN(ms)) {
+		throw new Error(
+			`invalid ${param}: ${JSON.stringify(input)} is not a parseable date`,
+		);
+	}
+	return new Date(ms).toISOString().replace(/\.\d{3}Z$/, "Z");
 }

@@ -139,6 +139,8 @@ Chaque message retourne doit etre structure ainsi :
 }
 ```
 
+`content` reflete la derniere modification du message ; `timestamp` garde l'heure d'envoi d'origine. Un message supprime pour tout le monde est retourne avec `"message_type": "revoked"` et un `content` vide.
+
 Le champ `role` est obligatoire et doit toujours valoir :
 
 - `"me"` pour les messages de l'utilisateur ;

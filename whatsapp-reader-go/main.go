@@ -9,6 +9,8 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"flag"
 	"fmt"
 	"os"
@@ -20,6 +22,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/mdp/qrterminal/v3"
 	"go.mau.fi/whatsmeow"
+	waE2E "go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/proto/waHistorySync"
 	"go.mau.fi/whatsmeow/store"
 	"go.mau.fi/whatsmeow/store/sqlstore"
@@ -30,10 +33,16 @@ import (
 )
 
 type collector struct {
-	client *whatsmeow.Client
-	store  *MessageStore
-	log    waLog.Logger
+	client   *whatsmeow.Client
+	store    *MessageStore
+	mediaDir string
+	log      waLog.Logger
 }
+
+const (
+	maxMediaFileBytes = 25 << 20
+	mediaDownloadTime = 30 * time.Second
+)
 
 func main() {
 	defaultDataDir := ""
@@ -58,6 +67,13 @@ func main() {
 func run(dataDir string, fullSync, verbose bool) error {
 	if err := os.MkdirAll(dataDir, 0o700); err != nil {
 		return fmt.Errorf("create data dir: %w", err)
+	}
+	mediaDir := filepath.Join(dataDir, "media")
+	if err := os.MkdirAll(mediaDir, 0o700); err != nil {
+		return fmt.Errorf("create media dir: %w", err)
+	}
+	if err := os.Chmod(mediaDir, 0o700); err != nil {
+		return fmt.Errorf("restrict media dir permissions: %w", err)
 	}
 
 	logLevel := "INFO"
@@ -96,7 +112,12 @@ func run(dataDir string, fullSync, verbose bool) error {
 	defer msgStore.Close()
 
 	client := whatsmeow.NewClient(device, waLog.Stdout("Client", logLevel, true))
-	c := &collector{client: client, store: msgStore, log: log}
+	c := &collector{
+		client:   client,
+		store:    msgStore,
+		mediaDir: mediaDir,
+		log:      log,
+	}
 	client.AddEventHandler(c.handleEvent)
 
 	if client.Store.ID == nil {
@@ -148,9 +169,9 @@ func (c *collector) handleEvent(evt any) {
 }
 
 func (c *collector) storeMessage(ctx context.Context, evt *events.Message) {
-	content, msgType := extractContent(evt.Message)
-	if msgType == "protocol" {
-		// App-state / edit / revoke envelopes, not user-visible messages.
+	if evt.Message != nil && evt.Message.GetProtocolMessage() != nil {
+		// Edits and revokes rewrite stored messages; other protocol messages carry no chat content.
+		c.persistMessage(ctx, evt)
 		return
 	}
 	if err := c.store.UpsertChat(ctx, evt.Info.Chat.String(), "", evt.Info.IsGroup); err != nil {
@@ -161,7 +182,26 @@ func (c *collector) storeMessage(ctx context.Context, evt *events.Message) {
 			c.log.Errorf("upsert contact %s: %v", evt.Info.Sender, err)
 		}
 	}
-	err := c.store.UpsertMessage(ctx, StoredMessage{
+	c.persistMessage(ctx, evt)
+}
+
+func (c *collector) persistMessage(ctx context.Context, evt *events.Message) bool {
+	if secret := evt.Message.GetSecretEncryptedMessage(); secret != nil {
+		c.persistSecretEdit(ctx, evt, secret)
+		return false
+	}
+	if revision, ok := extractRevision(evt); ok {
+		c.persistRevision(ctx, revision)
+		return false
+	}
+	content, msgType := extractContent(evt.Message)
+	if msgType == "protocol" {
+		return false
+	}
+	if msgType == "unknown" && evt.Message != nil {
+		c.log.Infof("message %s has an unknown type (fields: %s)", evt.Info.ID, messageFields(evt.Message))
+	}
+	revoked, err := c.store.UpsertMessage(ctx, StoredMessage{
 		ID:          evt.Info.ID,
 		ChatJID:     evt.Info.Chat.String(),
 		SenderJID:   evt.Info.Sender.ToNonAD().String(),
@@ -172,6 +212,127 @@ func (c *collector) storeMessage(ctx context.Context, evt *events.Message) {
 	})
 	if err != nil {
 		c.log.Errorf("store message %s: %v", evt.Info.ID, err)
+		return false
+	}
+	if !revoked {
+		c.persistMedia(ctx, evt)
+	}
+	return true
+}
+
+// persistSecretEdit decrypts an edit that WhatsApp sent encrypted with the
+// original message's secret. Poll and event edits are dropped: the store keeps
+// no poll options or events to apply them to.
+func (c *collector) persistSecretEdit(ctx context.Context, evt *events.Message, secret *waE2E.SecretEncryptedMessage) {
+	if secret.GetSecretEncType() != waE2E.SecretEncryptedMessage_MESSAGE_EDIT {
+		return
+	}
+	targetID := secret.GetTargetMessageKey().GetID()
+	decrypted, err := c.client.DecryptSecretEncryptedMessage(ctx, evt)
+	if err != nil {
+		c.log.Warnf("decrypt edit of message %s: %v", targetID, err)
+		return
+	}
+	revision, ok := extractSecretEdit(evt, decrypted)
+	if !ok {
+		c.log.Warnf("skip edit %s: no target message", evt.Info.ID)
+		return
+	}
+	c.persistRevision(ctx, revision)
+}
+
+func (c *collector) persistRevision(ctx context.Context, revision StoredRevision) {
+	orphanFiles, err := c.store.SaveRevision(ctx, revision)
+	if err != nil {
+		c.log.Errorf("store %s of message %s: %v", revision.Kind, revision.MessageID, err)
+		return
+	}
+	for _, fileName := range orphanFiles {
+		err := os.Remove(filepath.Join(c.mediaDir, fileName))
+		if err != nil && !os.IsNotExist(err) {
+			c.log.Errorf("delete media of revoked message %s: %v", revision.MessageID, err)
+		}
+	}
+}
+
+func (c *collector) persistMedia(ctx context.Context, evt *events.Message) {
+	media := extractMedia(evt.Message)
+	if media == nil || media.viewOnce || media.sizeBytes > maxMediaFileBytes {
+		return
+	}
+	fileHash := media.message.GetFileSHA256()
+	if len(fileHash) != sha256.Size {
+		c.log.Warnf("skip media for message %s: invalid SHA-256", evt.Info.ID)
+		return
+	}
+	fileName := hex.EncodeToString(fileHash)
+	finalPath := filepath.Join(c.mediaDir, fileName)
+	if info, err := os.Stat(finalPath); err == nil {
+		if info.Size() <= 0 || info.Size() > maxMediaFileBytes {
+			c.log.Warnf("skip media for message %s: invalid stored size", evt.Info.ID)
+			return
+		}
+		c.persistMediaMetadata(ctx, evt, media, fileName, info.Size())
+		return
+	} else if !os.IsNotExist(err) {
+		c.log.Errorf("inspect media for message %s: %v", evt.Info.ID, err)
+		return
+	}
+
+	temp, err := os.CreateTemp(c.mediaDir, ".download-*")
+	if err != nil {
+		c.log.Errorf("create media file for message %s: %v", evt.Info.ID, err)
+		return
+	}
+	tempPath := temp.Name()
+	defer os.Remove(tempPath)
+
+	downloadCtx, cancel := context.WithTimeout(ctx, mediaDownloadTime)
+	err = c.client.DownloadToFile(downloadCtx, media.message, temp)
+	cancel()
+	if err != nil {
+		temp.Close()
+		c.log.Warnf("download media for message %s: %v", evt.Info.ID, err)
+		return
+	}
+	info, err := temp.Stat()
+	if err != nil || info.Size() > maxMediaFileBytes {
+		temp.Close()
+		c.log.Warnf("skip media for message %s: invalid downloaded size", evt.Info.ID)
+		return
+	}
+	if err := temp.Close(); err != nil {
+		c.log.Errorf("close media for message %s: %v", evt.Info.ID, err)
+		return
+	}
+	if err := os.Rename(tempPath, finalPath); err != nil {
+		c.log.Errorf("store media for message %s: %v", evt.Info.ID, err)
+		return
+	}
+	if err := os.Chmod(finalPath, 0o600); err != nil {
+		c.log.Errorf("restrict media for message %s: %v", evt.Info.ID, err)
+		return
+	}
+	c.persistMediaMetadata(ctx, evt, media, fileName, info.Size())
+}
+
+func (c *collector) persistMediaMetadata(
+	ctx context.Context,
+	evt *events.Message,
+	media *extractedMedia,
+	fileName string,
+	sizeBytes int64,
+) {
+	err := c.store.UpsertMedia(ctx, StoredMedia{
+		MessageID:       evt.Info.ID,
+		ChatJID:         evt.Info.Chat.String(),
+		MIMEType:        media.mimeType,
+		SizeBytes:       sizeBytes,
+		DurationSeconds: media.durationSeconds,
+		FileName:        fileName,
+	})
+	if err != nil {
+		c.log.Errorf("store media metadata for message %s: %v", evt.Info.ID, err)
 	}
 }
 
@@ -194,24 +355,9 @@ func (c *collector) handleHistorySync(ctx context.Context, data *waHistorySync.H
 			if err != nil {
 				continue
 			}
-			content, msgType := extractContent(msgEvt.Message)
-			if msgType == "protocol" {
-				continue
+			if c.persistMessage(ctx, msgEvt) {
+				stored++
 			}
-			err = c.store.UpsertMessage(ctx, StoredMessage{
-				ID:          msgEvt.Info.ID,
-				ChatJID:     chatJID.String(),
-				SenderJID:   msgEvt.Info.Sender.ToNonAD().String(),
-				IsFromMe:    msgEvt.Info.IsFromMe,
-				Timestamp:   msgEvt.Info.Timestamp,
-				Content:     content,
-				MessageType: msgType,
-			})
-			if err != nil {
-				c.log.Errorf("store history message %s: %v", msgEvt.Info.ID, err)
-				continue
-			}
-			stored++
 		}
 	}
 	c.log.Infof("History sync: stored %d messages", stored)

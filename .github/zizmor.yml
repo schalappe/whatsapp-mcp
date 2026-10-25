@@ -1,0 +1,6 @@
+# zizmor config (CI's `workflows` job and `uvx zizmor .github/`).
+rules:
+  # Flags `uses: ./.github/actions/...`. Those composite actions live in this repo and are reviewed in the
+  # same PRs as the workflows calling them; the suggested `$/` form is rejected by actionlint.
+  self-repository:
+    disable: true
