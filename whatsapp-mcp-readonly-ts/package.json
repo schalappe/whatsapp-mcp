@@ -8,7 +8,7 @@
 		"start": "bun run src/index.ts",
 		"test": "bun test",
 		"check": "biome ci . && tsc --noEmit && bun test",
-		"audit": "bun audit --audit-level=high --ignore=GHSA-27r3-jxmh-p828"
+		"audit": "bun audit --audit-level=high"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "2.5.15",
